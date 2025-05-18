@@ -3,151 +3,91 @@ import { useState, useRef, useEffect } from 'react'
 
 interface DeepfakeExperiencePlayerProps {
   videoUrl: string | null;
-  introAudioUrl?: string | null;
-  isLoading: boolean; // isLoading from parent (true if step 4 is processing)
-  error: string | null; // error from parent (if step 4 failed)
-  pollingMessage?: string | null; // Pass this from parent if needed for display
+  // introAudioUrl?: string | null; // Removed for simplification in this step
+  isLoading: boolean; // isLoading from parent (e.g. if page.tsx determines overall loading state)
+  error: string | null; // error from parent
+  // pollingMessage?: string | null; // Removed, parent should handle this message display
   onNext: () => void;
 }
 
 export default function DeepfakeExperiencePlayer({
   videoUrl,
-  introAudioUrl,
+  // introAudioUrl, // Removed
   isLoading: parentIsLoading,
   error: parentError,
-  pollingMessage, // Added prop
+  // pollingMessage, // Removed
   onNext
 }: DeepfakeExperiencePlayerProps) {
-  const introAudioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-
-  // Stages: 'idle', 'loading_intro', 'playing_intro', 'loading_video', 'playing_video', 'error'
-  const [currentStage, setCurrentStage] = useState<'idle' | 'loading_intro' | 'playing_intro' | 'loading_video' | 'playing_video' | 'error'>('idle');
+  const [internalLoading, setInternalLoading] = useState(true); // Tracks video element's loading state
   const [internalError, setInternalError] = useState<string | null>(null);
 
   useEffect(() => {
-    setInternalError(parentError);
+    // Prioritize parent error
     if (parentError) {
-        setCurrentStage('error');
-    }
-  }, [parentError]);
-
-  // Determine initial stage based on props when not already in a playing/error state
-  useEffect(() => {
-    if (parentIsLoading && currentStage !== 'error' && currentStage !== 'playing_intro' && currentStage !== 'playing_video') {
-      setCurrentStage(introAudioUrl ? 'loading_intro' : 'loading_video');
+      setInternalError(parentError);
+      setInternalLoading(false);
       return;
     }
-    if (parentError && currentStage !== 'error') {
-        setCurrentStage('error');
-        return;
-    }
+    // If no parent error, clear internal error if videoUrl changes (allows retry)
+    setInternalError(null);
 
-    if (!parentIsLoading && !parentError && currentStage !== 'playing_intro' && currentStage !== 'playing_video' && currentStage !== 'error') {
-        if (introAudioUrl && !videoUrl) { 
-            setCurrentStage('loading_intro');
-        } else if (videoUrl) { 
-            setCurrentStage(introAudioUrl ? 'loading_intro' : 'loading_video');
-        } else if (introAudioUrl) { 
-            setCurrentStage('loading_intro');
-        } else {
-            setCurrentStage('idle');
-        }
-    }
-
-  }, [introAudioUrl, videoUrl, parentIsLoading, parentError, currentStage]);
-
-  // Effect to handle actual playback based on stage
-  useEffect(() => {
-    const introElement = introAudioRef.current;
     const videoElement = videoRef.current;
-
-    if (currentStage === 'loading_intro' && introElement && introAudioUrl) {
-      console.log("DFEP: Loading intro audio:", introAudioUrl);
-      introElement.src = introAudioUrl;
-      introElement.load();
-      introElement.play()
-        .then(() => setCurrentStage('playing_intro'))
-        .catch(err => {
-          console.error("DFEP: Intro audio play error:", err);
-          setInternalError("소개 음성 재생 실패: " + err.message);
-          setCurrentStage('error');
-        });
-    } else if (currentStage === 'loading_video' && videoElement && videoUrl) {
-      console.log("DFEP: Loading main video:", videoUrl);
-      videoElement.src = videoUrl;
-      videoElement.load();
-      videoElement.play()
-        .then(() => setCurrentStage('playing_video'))
-        .catch(err => {
-          console.error("DFEP: Main video play error:", err);
-          setInternalError("딥페이크 영상 재생 실패: " + err.message);
-          setCurrentStage('error');
-        });
+    if (videoElement && videoUrl) {
+      console.log("DFEP: videoUrl prop received:", videoUrl);
+      setInternalLoading(true); // Expect loading to start
+    } else if (!videoUrl) {
+      if(!parentIsLoading) setInternalLoading(false);
     }
-    // Cleanup function to pause and reset src when component unmounts or videoUrl/introAudioUrl changes
-    return () => {
-        if (introElement) {
-            introElement.pause();
-            if (introAudioUrl) introElement.src = ''; // Reset src to ensure it stops loading/playing
-        }
-        if (videoElement) {
-            videoElement.pause();
-            if (videoUrl) videoElement.src = ''; // Reset src
-        }
-    };
-  }, [currentStage, introAudioUrl, videoUrl]);
+  }, [videoUrl, parentError]); // Rerun when videoUrl or parentError changes
 
-  const handleIntroAudioEnded = () => {
-    console.log("DFEP: Intro audio ended.");
-    if (videoUrl) {
-      setCurrentStage('loading_video');
-    } else if (parentIsLoading) {
-      setCurrentStage('loading_video'); 
-      setInternalError(null);
-    } else {
-      // If intro ends and no videoUrl, and not parentIsLoading, it implies video is missing or failed to load prior.
-      // The main useEffect for props handling should ideally set to error or idle.
-      // However, if onNext is the only way forward, this might be an issue.
-      // For now, if no video, consider it an issue or rely on onNext button if appropriate.
-      setInternalError("소개 음성 후 재생할 딥페이크 영상이 없습니다.");
-      setCurrentStage('error'); // Or, allow onNext if that makes sense.
+  const handleVideoError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
+    const videoElement = e.currentTarget;
+    const error = videoElement.error;
+    let errorMessage = '동영상 재생 중 오류가 발생했습니다.';
+    
+    if (error) {
+      switch (error.code) {
+        case MediaError.MEDIA_ERR_ABORTED:  errorMessage = '영상 재생이 중단되었습니다.'; break;
+        case MediaError.MEDIA_ERR_NETWORK:  errorMessage = '네트워크 문제로 영상 로딩에 실패했습니다.'; break;
+        case MediaError.MEDIA_ERR_DECODE:   errorMessage = '영상 디코딩에 실패했습니다. 파일 형식을 확인해주세요.'; break;
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          errorMessage = '영상 형식을 지원하지 않거나 파일을 찾을 수 없습니다.';
+          console.error('DFEP: Video URL that failed:', videoUrl);
+          break;
+        default: errorMessage = `알 수 없는 미디어 오류입니다 (코드: ${error.code}).`;
+      }
     }
+    console.error('DFEP: Video error:', errorMessage, error);
+    setInternalError(errorMessage);
+    setInternalLoading(false);
   };
 
-  const handleVideoEnded = () => {
-    console.log("DFEP: Main video ended.");
-    // onNext(); // Typically, a button press handles onNext for user control
-  };
-  
-  const handleMediaError = (e: React.SyntheticEvent<HTMLAudioElement | HTMLVideoElement, Event>, type: string) => {
-    const mediaElement = e.currentTarget;
-    let errorMsg = `알 수 없는 ${type} 오류입니다.`;
-    if (mediaElement.error) {
-        // See: https://developer.mozilla.org/en-US/docs/Web/API/MediaError/code
-        switch (mediaElement.error.code) {
-            case 1: /* MEDIA_ERR_ABORTED */ errorMsg = `${type} 로딩이 중단되었습니다.`; break;
-            case 2: /* MEDIA_ERR_NETWORK */ errorMsg = `네트워크 오류로 ${type} 재생에 실패했습니다.`; break;
-            case 3: /* MEDIA_ERR_DECODE */ errorMsg = `${type} 디코딩 중 오류가 발생했습니다.`; break;
-            case 4: /* MEDIA_ERR_SRC_NOT_SUPPORTED */ errorMsg = `${type} 형식을 지원하지 않거나, 파일을 찾을 수 없습니다.`; break;
-        }
-    }
-    console.error(`DFEP: ${type} Error:`, errorMsg, mediaElement.error);
-    setInternalError(errorMsg);
-    setCurrentStage('error');
+  const handleCanPlay = () => {
+    console.log("DFEP: Video can play.");
+    setInternalLoading(false);
+    // Attempt to play if autoplay is desired and not already handled by attribute
+    // videoRef.current?.play().catch(e => console.warn("DFEP: Autoplay onCanPlay failed", e));
   };
 
-  // Consolidate isLoading state. If parent says it's loading, this component reflects that for its UI.
-  const effectiveIsLoading = parentIsLoading || currentStage.startsWith('loading');
-  const displayError = internalError || parentError;
+  const handleLoadedData = () => {
+    console.log("DFEP: Video loaded data.");
+    setInternalLoading(false);
+  };
+
+  const handleLoadStart = () => {
+    console.log("DFEP: Video load start.");
+    setInternalLoading(true);
+    setInternalError(null); // Clear previous errors on new load attempt
+  };
+
+  const displayError = parentError || internalError;
+  // isLoading should consider parentIsLoading for overall page state, and internalLoading for video element state.
+  const effectiveIsLoading = parentIsLoading || (internalLoading && !!videoUrl && !displayError);
 
   return (
     <div className="flex flex-col items-center space-y-4 w-full p-4 bg-gray-50 rounded-lg shadow-md">
-      {/* Title is now dynamic based on parent step context in page.tsx */}
-      {/* <h2 className="text-xl font-semibold text-gray-800">5. 딥페이크 시나리오 체험</h2> */}
-      
       <div className="w-full max-w-xl aspect-video bg-black rounded-md overflow-hidden relative">
-        {/* Error Display takes precedence */} 
         {displayError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 bg-opacity-95 p-4 z-20">
             <p className="text-red-400 font-semibold text-lg mb-2">! 오류 발생 !</p>
@@ -155,64 +95,46 @@ export default function DeepfakeExperiencePlayer({
           </div>
         )}
 
-        {/* Loading Spinner (only if no error) */} 
         {effectiveIsLoading && !displayError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 bg-opacity-70 z-10">
             <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-400"></div>
-            <p className="text-white mt-3 text-sm">
-              {pollingMessage ? pollingMessage : 
-                (currentStage === 'loading_intro' ? "소개 음성 준비 중..." : 
-                 currentStage === 'loading_video' ? "딥페이크 영상 준비 중..." : 
-                 "콘텐츠 로딩 중...")}
-            </p>
+            <p className="text-white mt-3 text-sm">딥페이크 영상 준비 중...</p>
           </div>
         )}
 
-        {/* Intro Audio Player (plays if stage allows and no error/loading overlay) */} 
-        {introAudioUrl && (
-           <audio 
-            ref={introAudioRef} 
-            onEnded={handleIntroAudioEnded} 
-            onError={(e) => handleMediaError(e, "소개 음성")}
-            onCanPlay={() => {if (currentStage === 'loading_intro') introAudioRef.current?.play().catch(e => console.error('DFEP: Intro autoplay failed', e));}}
-            onPlay={() => { console.log("DFEP: Intro playing"); setCurrentStage('playing_intro');}}
-            onPause={() => { if(currentStage === 'playing_intro' && introAudioRef.current && !introAudioRef.current.ended) setCurrentStage('loading_intro');}}
-            preload="auto"
-            className={(currentStage === 'playing_intro' || currentStage === 'loading_intro') && !displayError && !effectiveIsLoading ? '' : 'hidden'}
-          />
-        )}
-
         {/* Video Player (plays if stage allows and no error/loading overlay) */} 
+        {/* Render video tag if videoUrl is provided, even if loading/error, so events can fire */} 
         {videoUrl && (
           <video
             ref={videoRef}
-            className={`w-full h-full ${(currentStage === 'playing_video' || (currentStage === 'loading_video' && !introAudioUrl)) && !displayError && !effectiveIsLoading ? 'block' : 'hidden'}`}
+            key={videoUrl}
+            className={`w-full h-full ${!effectiveIsLoading && !displayError ? 'block' : 'hidden'}`}
             controls
-            onEnded={handleVideoEnded}
-            onError={(e) => handleMediaError(e, "딥페이크 영상")}
-            onCanPlay={() => {if (currentStage === 'loading_video') videoRef.current?.play().catch(e => console.error('DFEP: Video autoplay failed', e));}}
-            onPlay={() => { console.log("DFEP: Video playing"); setCurrentStage('playing_video');}}
-            onPause={() => { if(currentStage === 'playing_video' && videoRef.current && !videoRef.current.ended) setCurrentStage('loading_video');}}
-            preload="metadata"
+            autoPlay
+            preload="auto"
+            onLoadedData={handleLoadedData}
+            onCanPlay={handleCanPlay}
+            onError={handleVideoError}
+            onLoadStart={handleLoadStart}
           >
             <source src={videoUrl} type="video/mp4" />
+            <source src={videoUrl} type="video/x-m4v" />
             죄송합니다. 브라우저에서 비디오를 지원하지 않습니다.
           </video>
         )}
         
-        {/* Idle/Empty state if nothing else is shown */} 
-        {currentStage === 'idle' && !effectiveIsLoading && !displayError && (
+        {!videoUrl && !effectiveIsLoading && !displayError && (
              <div className="absolute inset-0 flex items-center justify-center">
-                <p className="text-gray-400">체험을 로드할 준비가 되었습니다.</p>
+                <p className="text-gray-400">체험 영상이 아직 준비되지 않았습니다.</p>
             </div>
         )}
       </div>
 
       <button
         onClick={onNext}
-        disabled={effectiveIsLoading || currentStage === 'playing_intro' || currentStage === 'playing_video' || !!displayError}
+        disabled={effectiveIsLoading || !!displayError}
         className={`w-full max-w-xs mt-4 px-6 py-3 rounded-lg font-semibold text-white transition-colors shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-          (effectiveIsLoading || currentStage === 'playing_intro' || currentStage === 'playing_video' || !!displayError)
+          (effectiveIsLoading || !!displayError)
             ? 'bg-gray-400 cursor-not-allowed'
             : 'bg-blue-600 hover:bg-blue-700'
         }`}

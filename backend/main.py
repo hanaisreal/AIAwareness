@@ -405,30 +405,56 @@ async def get_faceswap_status_endpoint(task_id: str):
 async def stream_video(url: str = Query(...)):
     print(f"[STREAM_VIDEO] Received request for URL: {url}")
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client: # Added follow_redirects and timeout here
             print(f"[STREAM_VIDEO] Fetching video from: {url}")
             
-            headers = {
+            request_headers = {
                 "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-                "Range": "bytes=0-"
+                # "Range": "bytes=0-" # Range header might be problematic for some CDNs if not handled perfectly, let browser decide for now or add back if seeking issues.
             }
             
-            # Conditionally add Akool API key if the URL is an Akool domain
-            if "akool.com" in url: # Simple check, adjust if Akool URLs are more varied
-                print(f"[STREAM_VIDEO] Akool domain detected, adding Authorization header.")
-                headers["Authorization"] = f"Bearer {AKOOL_API_KEY}"
+            # Only add Akool API key for actual Akool API domains, not general CDNs like CloudFront
+            # Akool might use CloudFront, but those URLs are typically pre-signed and don't use the API bearer token.
+            if "openapi.akool.com" in url or "sg3.akool.com" in url: # Be more specific about Akool domains
+                print(f"[STREAM_VIDEO] Akool API domain detected, adding Authorization header.")
+                request_headers["Authorization"] = f"Bearer {AKOOL_API_KEY}"
+            else:
+                print(f"[STREAM_VIDEO] Not an Akool API domain, no Authorization header added for URL: {url}")
             
-            resp = await client.get(url, follow_redirects=True, headers=headers)
+            # Make the GET request
+            resp = await client.get(url, headers=request_headers)
+            
             print(f"[STREAM_VIDEO] Source response status: {resp.status_code}")
-            
+            print(f"[STREAM_VIDEO] Source response headers: {resp.headers}")
+
             if resp.status_code == 200:
-                print(f"[STREAM_VIDEO] Successfully fetched video. Forcing Content-Type to video/mp4 for streaming.")
-                return StreamingResponse(resp.aiter_bytes(), media_type="video/mp4")
+                print(f"[STREAM_VIDEO] Successfully fetched video. Content-Type from source: {resp.headers.get('Content-Type')}. Streaming as video/mp4.")
+                # Ensure the client knows it's getting mp4. The source Content-Type might be different.
+                response_headers = {
+                    "Content-Type": "video/mp4",
+                    "Content-Length": resp.headers.get("Content-Length", ""), # Pass through content length if available
+                    "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"), # Pass through accept ranges
+                }
+                # Filter out empty headers
+                response_headers = {k: v for k, v in response_headers.items() if v}
+
+                return StreamingResponse(resp.aiter_bytes(), media_type="video/mp4", headers=response_headers)
+            elif resp.status_code == 206: # Partial Content - for range requests, though we removed explicit range for now
+                print(f"[STREAM_VIDEO] Successfully fetched partial video content (206). Content-Type from source: {resp.headers.get('Content-Type')}. Streaming as video/mp4.")
+                response_headers = {
+                    "Content-Type": "video/mp4", # Or use resp.headers.get('Content-Type') if reliable
+                    "Content-Range": resp.headers.get("Content-Range", ""),
+                    "Content-Length": resp.headers.get("Content-Length", ""),
+                    "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
+                }
+                response_headers = {k: v for k, v in response_headers.items() if v}
+                return StreamingResponse(resp.aiter_bytes(), status_code=206, media_type="video/mp4", headers=response_headers)
             else:
                 body_bytes = await resp.aread()
-                print(f"[STREAM_VIDEO] Error fetching video from Akool. Status: {resp.status_code}, Body: {body_bytes!r}")
-                error_detail = body_bytes.decode(errors='replace')
-                raise HTTPException(status_code=resp.status_code, detail=f"Error fetching video from source: {error_detail}")
+                error_body_for_log = body_bytes[:500].decode(errors='replace') # Log first 500 bytes
+                print(f"[STREAM_VIDEO] Error fetching video from source. Status: {resp.status_code}, Body (first 500 bytes): {error_body_for_log!r}")
+                raise HTTPException(status_code=resp.status_code, detail=f"Error fetching video from source: {error_body_for_log}")
+
     except httpx.RequestError as e:
         print(f"[STREAM_VIDEO] httpx.RequestError while fetching video: {e}")
         raise HTTPException(status_code=500, detail=f"Request error while fetching video: {str(e)}")
