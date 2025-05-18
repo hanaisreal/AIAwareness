@@ -1,7 +1,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
 
 # C extensions
 *.so
@@ -187,7 +187,7 @@ backend/__pycache__/
 backend/venv/
 backend/.venv/
 backend/env/
-backend/.env/
+backend/ENV/
 backend/activate_this.py
 
 # Build artifacts
@@ -233,3 +233,124 @@ coverage/
 # Compiled Python files
 *.pyc
 *.pyo
+
+# Python Virtual Environments
+# Ensure these are specific to backend if that's the only place they should be
+backend/venv/
+backend/.venv/
+backend/env/
+backend/ENV/
+backend/activate_this.py # Often found in older virtualenv setups
+
+# Backend Specific
+backend/temp_uploaded_files/
+
+# Environment variables - IMPORTANT: Contains sensitive keys
+# Generic .env catch-all
+.env
+# Specific .env files for frontend and backend
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local # Catches .env.development.local, .env.production.local etc.
+backend/.env
+
+# Node.js Dependencies (should be specific to frontend if possible)
+# If node_modules can only exist in frontend:
+frontend/node_modules/
+# If node_modules could exist elsewhere (e.g. root for some tools), then broader:
+# node_modules/
+
+# Next.js (Frontend)
+frontend/.next/
+frontend/out/
+
+# Build artifacts / Distribution
+build/
+dist/
+
+# OS generated files
+.DS_Store
+._*
+Thumbs.db
+
+# IDE / Editor specific (examples)
+.vscode/
+# .idea/ # Uncomment if you use JetBrains IDEs and want to ignore project-specific settings
+
+# Log files
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Coverage reports
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+.nyc_output/
+
+# Other common ignores from your existing file (selectively kept)
+*.so
+.Python
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.nox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+*.mo
+*.pot
+local_settings.py # Django specific
+db.sqlite3          # Django specific
+db.sqlite3-journal # Django specific
+instance/           # Flask specific
+.webassets-cache    # Flask specific
+.scrapy             # Scrapy specific
+docs/_build/        # Sphinx specific
+.pybuilder/
+_target/ # pybuilder target, also common for other build systems
+.ipynb_checkpoints
+profile_default/    # IPython specific
+ipython_config.py   # IPython specific
+__pypackages__/
+celerybeat-schedule
+celerybeat.pid
+*.sage.py
+.spyderproject
+.spyproject
+.ropeproject
+/site               # mkdocs specific
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+.ruff_cache/
+.pypirc
+.pdm.toml
+.pdm-python
+.pdm-build/

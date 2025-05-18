@@ -1,5 +1,8 @@
-fastapi==0.109.2
-python-multipart==0.0.9
-httpx==0.26.0
-python-dotenv==1.0.0
-uvicorn==0.27.1
+fastapi
+uvicorn[standard]
+python-dotenv
+httpx
+boto3
+elevenlabs
+pydantic
+ 
