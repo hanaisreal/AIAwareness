@@ -2,20 +2,23 @@ import os
 import httpx
 import uuid
 import json # For debugging payloads
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
 from typing import Optional, Dict
+import sys
+import traceback
 
 # ElevenLabs SDK
 from elevenlabs.client import ElevenLabs
 from elevenlabs import VoiceSettings, Voice
 
-load_dotenv()
+# Load environment variables from the root directory
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
 # --- Environment Variable Loading and Validation ---
 ELEVEN_LABS_API_KEY = os.getenv("ELEVEN_LABS_API_KEY")
@@ -47,15 +50,43 @@ if not all([S3_BUCKET_NAME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 
 
 # --- FastAPI Application Setup ---
-app = FastAPI()
+app = FastAPI(
+    title="Voice Cloning API",
+    description="API for voice cloning and face swapping",
+    version="1.0.0"
+)
+
+# CORS configuration
+CORS_ORIGINS = [
+    "https://ai-awareness-frontend.vercel.app",
+    "http://localhost:3000",
+    "https://ai-awareness-frontend-10dpc500r-hanaisreals-projects.vercel.app",
+    "https://*.vercel.app",  # Allow all Vercel preview deployments
+    "http://localhost:8000",  # Allow local backend
+    "https://ai-awarenesss-backend.vercel.app"  # Add your backend Vercel URL
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("CORS_ORIGINS", "http://localhost:3000"), "http://127.0.0.1:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add error handling middleware
+@app.middleware("http")
+async def catch_exceptions_middleware(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        print(f"Unhandled error: {str(e)}")
+        print("Traceback:")
+        print(traceback.format_exc())
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal server error: {str(e)}"}
+        )
 
 # --- AWS S3 Client Initialization ---
 s3_client = None
@@ -192,7 +223,11 @@ async def stream_video_from_url_helper(video_url: str):
 # --- API Endpoints ---
 @app.get("/")
 async def read_root():
-    return {"message": "Voice Cloning & Faceswap API is running"}
+    return {
+        "message": "Voice Cloning & Faceswap API is running",
+        "status": "healthy",
+        "version": "1.0.0"
+    }
 
 @app.post("/api/test-elevenlabs-tts")
 async def test_elevenlabs_tts():
@@ -295,70 +330,129 @@ async def generate_narrator_speech_endpoint(request_data: NarratorSpeechRequest)
 
 @app.post("/api/initiate-faceswap")
 async def initiate_faceswap_endpoint(user_image: UploadFile = File(...)):
-    if not all([AKOOL_API_KEY, EDUCATIONAL_VIDEO_URL, TARGET_FACE_IMAGE_URL, TARGET_FACE_OPTS_STR]):
-        raise HTTPException(status_code=500, detail="Server configuration error: Missing Akool video processing variables.")
-    if not S3_BUCKET_NAME: # S3 client init check is done by upload_to_s3
-        raise HTTPException(status_code=500, detail="Server configuration error: S3_BUCKET_NAME not set.")
-
-    # 1. Upload user's image to S3
-    source_image_s3_url = await upload_to_s3(user_image, S3_BUCKET_NAME)
-
-    # 2. Get face opts for the uploaded source image
-    source_face_opts = await get_akool_face_opts(source_image_s3_url, AKOOL_API_KEY)
-    if not source_face_opts:
-        # Optional: Consider deleting the S3 object if face detection fails
-        # try: s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=source_image_s3_url.split(S3_BUCKET_NAME + '/')[-1])
-        # except Exception as del_e: print(f"Could not delete S3 object {source_image_s3_url} after face detect fail: {del_e}")
-        raise HTTPException(status_code=400, detail="Could not detect a face in the uploaded image, or Akool API error during detection.")
-
-    # 3. Prepare payload for Akool Video Faceswap API
-    faceswap_api_url = "https://openapi.akool.com/api/open/v3/faceswap/highquality/specifyvideo"
-    headers = {
-        "Authorization": f"Bearer {AKOOL_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "sourceImage": [{"path": source_image_s3_url, "opts": source_face_opts}],
-        "targetImage": [{"path": TARGET_FACE_IMAGE_URL, "opts": TARGET_FACE_OPTS_STR}],
-        "modifyVideo": EDUCATIONAL_VIDEO_URL,
-        "face_enhance": 0, # 0 for no enhancement, 1 for enhancement
-    }
-    if AKOOL_WEBHOOK_URL:
-        payload["webhookUrl"] = AKOOL_WEBHOOK_URL
+    print(f"Received faceswap request for file: {user_image.filename}")
     
-    print(f"Calling Akool Video Faceswap API with payload: {json.dumps(payload, indent=2)}")
-
-    # 4. Call Akool Video Faceswap API
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            response = await client.post(faceswap_api_url, headers=headers, json=payload)
-            response.raise_for_status()
-            akool_response_data = response.json()
-            print(f"Akool faceswap API submission response: {akool_response_data}")
-
-            if akool_response_data.get("code") == 1000 and "data" in akool_response_data:
-                akool_data = akool_response_data["data"]
-                return {
-                    "message": "Faceswap initiated successfully.",
-                    "akool_task_id": akool_data.get("_id"), 
-                    "akool_job_id": akool_data.get("job_id"),
-                    "details": akool_response_data.get("msg"),
-                    "direct_url": akool_data.get("url") # Extract the direct URL if Akool provides it
+    if not s3_client:
+        error_msg = "S3 client not initialized. Check server logs and .env configuration."
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+    
+    if not AKOOL_API_KEY:
+        error_msg = "Akool API key not configured"
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+    
+    # Validate other critical Akool variables
+    if not EDUCATIONAL_VIDEO_URL:
+        error_msg = "EDUCATIONAL_VIDEO_URL is not configured in server environment."
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+        
+    try:
+        # Upload image to S3
+        print("Uploading image to S3...")
+        image_url = await upload_to_s3(user_image, S3_BUCKET_NAME)
+        print(f"Image uploaded to S3: {image_url}")
+        
+        # Get face landmarks for source image (user's uploaded image)
+        print("Getting face landmarks for source image from Akool...")
+        source_landmarks = await get_akool_face_opts(image_url, AKOOL_API_KEY)
+        if not source_landmarks:
+            error_msg = "Failed to detect face in the uploaded image using Akool /detect. Check uploaded image or Akool /detect logs."
+            print(error_msg)
+            raise HTTPException(status_code=400, detail=error_msg)
+        print(f"Source face landmarks obtained: {source_landmarks}")
+        
+        # Get face landmarks for target image (educational video)
+        print("Getting face landmarks for target image from Akool...")
+        target_landmarks = await get_akool_face_opts(TARGET_FACE_IMAGE_URL, AKOOL_API_KEY)
+        if not target_landmarks:
+            error_msg = "Failed to detect face in the target image using Akool /detect. Check target image or Akool /detect logs."
+            print(error_msg)
+            raise HTTPException(status_code=400, detail=error_msg)
+        print(f"Target face landmarks obtained: {target_landmarks}")
+        
+        # Call Akool faceswap API
+        print("Calling Akool faceswap API...")
+        faceswap_url = f"{AKOOL_API_BASE_URL}/faceswap/highquality/specifyvideo"
+        headers = {
+            "Authorization": f"Bearer {AKOOL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "sourceImage": [
+                {
+                    "path": image_url,
+                    "opts": source_landmarks
                 }
-            else:
-                error_msg = akool_response_data.get("msg", "Unknown error from Akool faceswap API submission.")
-                print(f"Akool faceswap API returned non-1000 code: {akool_response_data.get('code')} - {error_msg}")
-                raise HTTPException(status_code=502, detail=f"Akool API Error (submission): {error_msg}")
+            ],
+            "targetImage": [
+                {
+                    "path": TARGET_FACE_IMAGE_URL,
+                    "opts": target_landmarks
+                }
+            ],
+            "face_enhance": 0,
+            "modifyVideo": EDUCATIONAL_VIDEO_URL,
+            "webhookUrl": AKOOL_WEBHOOK_URL if AKOOL_WEBHOOK_URL else None
+        }
+        
+        print(f"Akool Faceswap Request URL: {faceswap_url}")
+        print(f"Akool Faceswap Request Headers: {json.dumps(headers, indent=2)}")
+        print(f"Akool Faceswap Request Payload: {json.dumps(payload, indent=2)}")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(faceswap_url, headers=headers, json=payload)
+            response_text = response.text
+            print(f"Akool Faceswap Raw Response Status: {response.status_code}")
+            print(f"Akool Faceswap Raw Response Headers: {json.dumps(dict(response.headers), indent=2)}")
+            print(f"Akool Faceswap Raw Response Body: {response_text}")
 
-        except httpx.HTTPStatusError as e:
-            error_details = e.response.text
-            try: error_details = e.response.json().get("msg", error_details)
-            except json.JSONDecodeError: pass
-            print(f"Akool faceswap API HTTP error (submission): {e.response.status_code} - {error_details}")
-            raise HTTPException(status_code=e.response.status_code, detail=f"Akool faceswap API request failed: {error_details}")
-        except Exception as e:
-            print(f"Unexpected error calling Akool faceswap API (submission): {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to initiate faceswap: {str(e)}")
+            response.raise_for_status()
+            
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                error_msg = "Failed to decode JSON response from Akool faceswap API."
+                print(f"{error_msg} Response text was: {response_text}")
+                raise HTTPException(status_code=502, detail=error_msg)
+
+            print(f"Akool faceswap Parsed JSON Response: {json.dumps(data, indent=2)}")
+            
+            if data.get("code") != 1000:
+                error_msg = f"Akool faceswap API error. Code: {data.get('code')}. Message: {data.get('msg', 'No specific error message provided by Akool.')}"
+                print(error_msg)
+                print(f"Full Akool error response: {json.dumps(data)}")
+                raise HTTPException(status_code=500, detail=error_msg)
+            
+            return {
+                "akool_task_id": data.get("data", {}).get("_id"),
+                "akool_job_id": data.get("data", {}).get("job_id"),
+                "message": data.get("msg", "Faceswap video generation started"),
+                "details": None,
+                "direct_url": data.get("data", {}).get("url")
+            }
+            
+    except httpx.HTTPStatusError as hse:
+        error_body = hse.response.text
+        print(f"Akool Faceswap API returned HTTP error: {hse.response.status_code}. Response: {error_body}")
+        detail_message = f"Akool API request failed with status {hse.response.status_code}."
+        try:
+            error_json = hse.response.json()
+            detail_message += f" Akool message: {error_json.get('msg', error_json.get('error_msg', 'No specific message.'))}"
+        except json.JSONDecodeError:
+            detail_message += f" Response body: {error_body[:200]}"
+        raise HTTPException(status_code=502, detail=detail_message)
+    except HTTPException as he:
+        print(f"HTTP Exception in faceswap: {str(he.detail)}")
+        raise he
+    except Exception as e:
+        error_msg = f"Unexpected error in faceswap: {str(e)}"
+        print(error_msg)
+        print("Traceback:")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.get("/api/faceswap-status/{task_id}")
@@ -464,6 +558,21 @@ async def stream_video(url: str = Query(...)):
     except Exception as e:
         print(f"[STREAM_VIDEO] General Exception while fetching video: {e} (Type: {type(e)})")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred while trying to stream video: {str(e)}")
+
+
+# Add OPTIONS handler for CORS preflight requests
+@app.options("/{full_path:path}")
+async def options_handler(request: Request, full_path: str):
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": request.headers.get("origin", "*"),
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "3600",
+        }
+    )
 
 
 if __name__ == "__main__":
