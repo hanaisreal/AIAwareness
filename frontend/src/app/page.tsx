@@ -1,11 +1,13 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
-import UserDataInput from '../components/UserDataInput'
 import EducationalVideo from '../components/EducationalVideo'
 import DeepfakeExperiencePlayer from '../components/DeepfakeExperiencePlayer'
 import ReflectionForm from '../components/ReflectionForm'
 import { uploadVoice, initiateFaceswapVideo, getFaceswapVideoStatus, getElevenLabsIntroAudio } from '../lib/api'
 import ListenToClonedVoice from '../components/ListenToClonedVoice'
+import ImageUpload from '../components/ImageUpload'
+import VoiceRecorder from '../components/VoiceRecorder'
+import UserInfoForm from '../components/UserInfoForm'
 
 const POLLING_INTERVAL = 5000; // 5 seconds
 const MAX_POLLS = 60; // 5 minutes max polling
@@ -14,10 +16,16 @@ const USER_VOICE_SCRIPT = "여보세요? 이번에 건강검진 예약해놨거�
 const RECORDING_SCRIPT_KOREAN = "안녕하세요. 지금 제 목소리를 녹음하고 있습니다. 이 목소리가 어떻게 복제될지 기대되네요.";
 const MIN_POLLS_FOR_STATUS_2_SUCCESS = 3;
 
+interface UserInfo {
+  name: string
+  age: string
+  gender: 'male' | 'female' | 'other'
+}
 
 export default function Home() {
   const [currentView, setCurrentView] = useState('welcome');
   const [step, setStep] = useState(1);
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [userImageFile, setUserImageFile] = useState<File | null>(null);
   const [userClonedVoiceId, setUserClonedVoiceId] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>("참여자");
@@ -34,6 +42,12 @@ export default function Home() {
   const [showNextButtonAfterEduVideo, setShowNextButtonAfterEduVideo] = useState(false);
 
   console.log("[Home Render] Step:", step, "isProcessing:", isProcessing, "akoolTaskId:", akoolTaskId, "genURL:", generatedVideoUrl, "pollCount:", pollCount, "processingMsg:", processingMessage, "pollingMsg:", pollingMessage, "error:", error);
+
+  const handleUserInfoSubmit = (info: UserInfo) => {
+    setUserInfo(info);
+    setUserName(info.name);
+    setCurrentView('explanation');
+  };
 
   // Step 1: Handle Image Upload AND Initiate Faceswap
   const handleImageUploadComplete = async (imageFile: File) => {
@@ -247,19 +261,17 @@ export default function Home() {
   ];
 
   const appStepComponents: { [key: number]: JSX.Element | null } = {
-    1: <UserDataInput
+    1: <ImageUpload
         key="image-upload"
         onImageUpload={handleImageUploadComplete}
         isProcessing={isProcessing && step === 1}
         processingMessage={step === 1 ? processingMessage : null}
-        inputMode="image"
        />,
-    2: <UserDataInput
+    2: <VoiceRecorder
         key="voice-upload"
         onVoiceRecording={handleVoiceRecordedAndClone}
         isProcessing={isProcessing && step === 2}
         processingMessage={step === 2 ? processingMessage : null}
-        inputMode="voice"
         scriptToRead={RECORDING_SCRIPT_KOREAN}
        />,
     3: (() => {
@@ -351,9 +363,7 @@ export default function Home() {
         <div className="w-full max-w-lg bg-white shadow-xl rounded-lg p-8 text-center">
           <h1 className="text-3xl font-bold mb-5 text-slate-800">안녕하세요!</h1>
           <p className="text-lg mb-8 text-slate-600">AI 딥페이크 위험성 알림 및 체험 프로그램에 오신 것을 환영합니다.</p>
-          <button onClick={() => setCurrentView('explanation')} className="w-full px-6 py-3 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors duration-150">
-            다음으로
-          </button>
+          <UserInfoForm onSubmit={handleUserInfoSubmit} />
         </div>
         <footer className="mt-8 text-xs text-gray-500">&copy; {new Date().getFullYear()} AI Awareness Project.</footer>
       </main>
