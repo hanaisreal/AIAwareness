@@ -4,7 +4,7 @@ import { useState } from 'react'
 interface UserInfo {
   name: string
   age: string
-  gender: 'male' | 'female' | 'other'
+  gender: 'male' | 'female'
 }
 
 interface UserInfoFormProps {
@@ -15,7 +15,7 @@ export default function UserInfoForm({ onSubmit }: UserInfoFormProps) {
   const [userInfo, setUserInfo] = useState<UserInfo>({
     name: '',
     age: '',
-    gender: 'other'
+    gender: 'male'
   })
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -83,16 +83,6 @@ export default function UserInfoForm({ onSubmit }: UserInfoFormProps) {
                 className="form-radio h-4 w-4 text-blue-600"
               />
               <span className="ml-2 text-gray-700">여성</span>
-            </label>
-            <label className="inline-flex items-center">
-              <input
-                type="radio"
-                value="other"
-                checked={userInfo.gender === 'other'}
-                onChange={(e) => setUserInfo(prev => ({ ...prev, gender: 'other' }))}
-                className="form-radio h-4 w-4 text-blue-600"
-              />
-              <span className="ml-2 text-gray-700">기타</span>
             </label>
           </div>
         </div>

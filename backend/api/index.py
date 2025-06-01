@@ -3,8 +3,8 @@ import httpx
 import uuid
 import json # For debugging payloads
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import boto3
@@ -12,6 +12,9 @@ from botocore.exceptions import NoCredentialsError, PartialCredentialsError, Cli
 from typing import Optional, Dict
 import sys
 import traceback
+from .face_configs import FACE_CONFIGS
+import io
+import urllib.parse
 
 # ElevenLabs SDK
 from elevenlabs.client import ElevenLabs
@@ -28,8 +31,6 @@ AKOOL_CLIENT_SECRET = os.getenv("AKOOL_CLIENT_SECRET", "")
 AKOOL_API_BASE_URL = "https://openapi.akool.com/api/open/v3"
 
 EDUCATIONAL_VIDEO_URL = os.getenv("EDUCATIONAL_VIDEO_URL")
-TARGET_FACE_IMAGE_URL = os.getenv("TARGET_FACE_IMAGE_URL") # URL of image used to get TARGET_FACE_OPTS_STR
-TARGET_FACE_OPTS_STR = os.getenv("TARGET_FACE_OPTS") # Expected format: "x1,y1:x2,y2:x3,y3:x4,y4"
 
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
@@ -43,8 +44,8 @@ if not ELEVEN_LABS_API_KEY:
     print("CRITICAL ERROR: ELEVEN_LABS_API_KEY not set in .env")
 if not AKOOL_API_KEY:
     print("CRITICAL ERROR: AKOOL_API_KEY not set in .env (checked AKOOL_API_KEY and MY_AKOOL_API_KEY)")
-if not all([EDUCATIONAL_VIDEO_URL, TARGET_FACE_IMAGE_URL, TARGET_FACE_OPTS_STR]):
-    print("Warning: Akool educational video/target face variables are not fully set (EDUCATIONAL_VIDEO_URL, TARGET_FACE_IMAGE_URL, TARGET_FACE_OPTS_STR).")
+if not all([EDUCATIONAL_VIDEO_URL]):
+    print("Warning: Akool educational video variables are not fully set (EDUCATIONAL_VIDEO_URL).")
 if not all([S3_BUCKET_NAME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION]):
     print("Warning: AWS S3 environment variables are not fully set for user image uploads. (S3_BUCKET_NAME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)")
 
@@ -125,6 +126,13 @@ class NarratorSpeechRequest(BaseModel):
     # Optional: add stability and similarity_boost if you want to control them for narrator
     # stability: Optional[float] = 0.7
     # similarity_boost: Optional[float] = 0.7
+
+class ElevenLabsSpeechRequest(BaseModel):
+    text: Optional[str] = None
+    name: Optional[str] = None
+    age: Optional[str] = None # Age is not used in speech text but good to have if needed later
+    voice_id: Optional[str] = "uyVNoMrnUku1dZyVEXwD" # Default to a standard voice
+    model_id: Optional[str] = "eleven_multilingual_v2"
 
 
 # --- Helper Functions ---
@@ -235,7 +243,7 @@ async def test_elevenlabs_tts():
         raise HTTPException(status_code=500, detail="ElevenLabs client not initialized.")
     
     test_text = "딥페이크 영상은 누구나 손쉽게 만들 수 있는데요."
-    test_voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel's voice ID (standard ElevenLabs voice)
+    test_voice_id = "z6Kj0hecH20CdetSElRT"  # Rachel's voice ID (standard ElevenLabs voice)
     test_model_id = "eleven_multilingual_v2"
 
     print(f"Testing ElevenLabs TTS with: VoiceID='{test_voice_id}', Model='{test_model_id}', Text='{test_text}'")
@@ -265,6 +273,56 @@ async def test_elevenlabs_tts():
                 error_detail_msg = f"ElevenLabs TTS test failed: {detail[0]['msg']}"
             elif isinstance(detail, str):
                  error_detail_msg = f"ElevenLabs TTS test failed: {detail}"
+        raise HTTPException(status_code=500, detail=error_detail_msg)
+
+@app.post("/api/generate-elevenlabs-speech")
+async def generate_elevenlabs_speech_endpoint(payload: ElevenLabsSpeechRequest):
+    if not elevenlabs_client:
+        raise HTTPException(status_code=500, detail="ElevenLabs client not initialized. Check API key.")
+
+    speech_text = payload.text
+    if not speech_text and payload.name:
+        speech_text = f"안녕하세요, {payload.name}님! 그럼 체험을 시작해볼까요?"
+    elif not speech_text:
+        raise HTTPException(status_code=400, detail="No text provided for speech generation, and name was also missing.")
+
+    print(f"ElevenLabs Speech Request: Text='{speech_text[:70]}...', VoiceID='{payload.voice_id}', Model='{payload.model_id}'")
+
+    try:
+        audio_stream = elevenlabs_client.text_to_speech.convert(
+            text=speech_text,
+            voice_id=payload.voice_id,
+            model_id=payload.model_id,
+            voice_settings=VoiceSettings(
+                stability=0.7, 
+                similarity_boost=0.75, 
+                style=0.0, # adjust if using stylistic voices
+                use_speaker_boost=True
+            ),
+            output_format="mp3_44100_128" # Ensure this matches your needs
+        )
+        
+        # It's better to stream the response directly if the client supports it.
+        # accumulate all chunks and then return
+        
+        audio_bytes_list = []
+        for chunk in audio_stream:
+            audio_bytes_list.append(chunk)
+        audio_content = b"".join(audio_bytes_list)
+
+        return StreamingResponse(io.BytesIO(audio_content), media_type="audio/mpeg")
+
+    except Exception as e:
+        error_message = f"ElevenLabs speech generation failed: {str(e)}"
+        print(error_message)
+        # Attempt to parse more specific error from ElevenLabs client if available
+        error_detail_msg = error_message
+        if hasattr(e, 'body') and isinstance(e.body, dict) and 'detail' in e.body:
+            detail = e.body['detail']
+            if isinstance(detail, list) and detail and isinstance(detail[0], dict) and 'msg' in detail[0]:
+                error_detail_msg = f"ElevenLabs API Error: {detail[0]['msg']}"
+            elif isinstance(detail, str):
+                 error_detail_msg = f"ElevenLabs API Error: {detail}"
         raise HTTPException(status_code=500, detail=error_detail_msg)
 
 @app.post("/api/clone-voice")
@@ -329,7 +387,12 @@ async def generate_narrator_speech_endpoint(request_data: NarratorSpeechRequest)
 
 
 @app.post("/api/initiate-faceswap")
-async def initiate_faceswap_endpoint(user_image: UploadFile = File(...)):
+async def initiate_faceswap_endpoint(
+    user_image: UploadFile = File(...),
+    section: str = Query(...),  # "FAKE_NEWS" or "IDENTITY_THEFT"
+    scenario: str = Query(...),  # "SCENARIO1" or "SCENARIO2"
+    gender: str = Query(...)  # "male" or "female"
+):
     print(f"Received faceswap request for file: {user_image.filename}")
     
     if not s3_client:
@@ -342,13 +405,25 @@ async def initiate_faceswap_endpoint(user_image: UploadFile = File(...)):
         print(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
     
-    # Validate other critical Akool variables
-    if not EDUCATIONAL_VIDEO_URL:
-        error_msg = "EDUCATIONAL_VIDEO_URL is not configured in server environment."
-        print(error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
-        
     try:
+        # Get the face configuration for the selected scenario
+        if section not in FACE_CONFIGS:
+            raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
+        
+        scenario_config = FACE_CONFIGS[section].get(scenario)
+        if not scenario_config:
+            raise HTTPException(status_code=400, detail=f"Invalid scenario: {scenario}")
+        
+        # Get gender-specific configuration
+        if gender not in scenario_config:
+            raise HTTPException(status_code=400, detail=f"Invalid gender: {gender}")
+        
+        gender_specific_config = scenario_config[gender]
+        if "image_swap" not in gender_specific_config or not gender_specific_config["image_swap"]:
+            raise HTTPException(status_code=400, detail=f"No image_swap configuration found for {section}/{scenario}/{gender}.")
+
+        target_config = gender_specific_config["image_swap"]["targetImage"]
+        
         # Upload image to S3
         print("Uploading image to S3...")
         image_url = await upload_to_s3(user_image, S3_BUCKET_NAME)
@@ -363,18 +438,9 @@ async def initiate_faceswap_endpoint(user_image: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail=error_msg)
         print(f"Source face landmarks obtained: {source_landmarks}")
         
-        # Get face landmarks for target image (educational video)
-        print("Getting face landmarks for target image from Akool...")
-        target_landmarks = await get_akool_face_opts(TARGET_FACE_IMAGE_URL, AKOOL_API_KEY)
-        if not target_landmarks:
-            error_msg = "Failed to detect face in the target image using Akool /detect. Check target image or Akool /detect logs."
-            print(error_msg)
-            raise HTTPException(status_code=400, detail=error_msg)
-        print(f"Target face landmarks obtained: {target_landmarks}")
-        
         # Call Akool faceswap API
         print("Calling Akool faceswap API...")
-        faceswap_url = f"{AKOOL_API_BASE_URL}/faceswap/highquality/specifyvideo"
+        faceswap_url = f"{AKOOL_API_BASE_URL}/faceswap/highquality/specifyimage"
         headers = {
             "Authorization": f"Bearer {AKOOL_API_KEY}",
             "Content-Type": "application/json"
@@ -389,12 +455,12 @@ async def initiate_faceswap_endpoint(user_image: UploadFile = File(...)):
             ],
             "targetImage": [
                 {
-                    "path": TARGET_FACE_IMAGE_URL,
-                    "opts": target_landmarks
+                    "path": target_config["path"],
+                    "opts": target_config["opts"]
                 }
             ],
             "face_enhance": 0,
-            "modifyVideo": EDUCATIONAL_VIDEO_URL,
+            "modifyImage": target_config["path"],
             "webhookUrl": AKOOL_WEBHOOK_URL if AKOOL_WEBHOOK_URL else None
         }
         
@@ -429,7 +495,7 @@ async def initiate_faceswap_endpoint(user_image: UploadFile = File(...)):
             return {
                 "akool_task_id": data.get("data", {}).get("_id"),
                 "akool_job_id": data.get("data", {}).get("job_id"),
-                "message": data.get("msg", "Faceswap video generation started"),
+                "message": data.get("msg", "Faceswap image generation completed"),
                 "details": None,
                 "direct_url": data.get("data", {}).get("url")
             }
@@ -499,21 +565,26 @@ async def get_faceswap_status_endpoint(task_id: str):
 async def stream_video(url: str = Query(...)):
     print(f"[STREAM_VIDEO] Received request for URL: {url}")
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client: # Added follow_redirects and timeout here
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
             print(f"[STREAM_VIDEO] Fetching video from: {url}")
             
+            # Add headers that might help with CloudFront access
             request_headers = {
                 "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-                # "Range": "bytes=0-" # Range header might be problematic for some CDNs if not handled perfectly, let browser decide for now or add back if seeking issues.
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "Origin": "http://localhost:3000",
+                "Referer": "http://localhost:3000"
             }
             
-            # Only add Akool API key for actual Akool API domains, not general CDNs like CloudFront
-            # Akool might use CloudFront, but those URLs are typically pre-signed and don't use the API bearer token.
-            if "openapi.akool.com" in url or "sg3.akool.com" in url: # Be more specific about Akool domains
-                print(f"[STREAM_VIDEO] Akool API domain detected, adding Authorization header.")
+            # Add Akool API key for CloudFront URLs
+            if "cloudfront.net" in url:
+                print(f"[STREAM_VIDEO] CloudFront URL detected, adding Authorization header")
                 request_headers["Authorization"] = f"Bearer {AKOOL_API_KEY}"
-            else:
-                print(f"[STREAM_VIDEO] Not an Akool API domain, no Authorization header added for URL: {url}")
+            elif "openapi.akool.com" in url or "sg3.akool.com" in url:
+                print(f"[STREAM_VIDEO] Akool API domain detected, adding Authorization header")
+                request_headers["Authorization"] = f"Bearer {AKOOL_API_KEY}"
             
             # Make the GET request
             resp = await client.get(url, headers=request_headers)
@@ -526,38 +597,118 @@ async def stream_video(url: str = Query(...)):
                 # Ensure the client knows it's getting mp4. The source Content-Type might be different.
                 response_headers = {
                     "Content-Type": "video/mp4",
-                    "Content-Length": resp.headers.get("Content-Length", ""), # Pass through content length if available
-                    "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"), # Pass through accept ranges
+                    "Content-Length": resp.headers.get("Content-Length", ""),
+                    "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                    "Cache-Control": "public, max-age=31536000"  # Cache for 1 year
                 }
                 # Filter out empty headers
                 response_headers = {k: v for k, v in response_headers.items() if v}
 
                 return StreamingResponse(resp.aiter_bytes(), media_type="video/mp4", headers=response_headers)
-            elif resp.status_code == 206: # Partial Content - for range requests, though we removed explicit range for now
+            elif resp.status_code == 206:  # Partial Content
                 print(f"[STREAM_VIDEO] Successfully fetched partial video content (206). Content-Type from source: {resp.headers.get('Content-Type')}. Streaming as video/mp4.")
                 response_headers = {
-                    "Content-Type": "video/mp4", # Or use resp.headers.get('Content-Type') if reliable
+                    "Content-Type": "video/mp4",
                     "Content-Range": resp.headers.get("Content-Range", ""),
                     "Content-Length": resp.headers.get("Content-Length", ""),
                     "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                    "Cache-Control": "public, max-age=31536000"  # Cache for 1 year
                 }
                 response_headers = {k: v for k, v in response_headers.items() if v}
                 return StreamingResponse(resp.aiter_bytes(), status_code=206, media_type="video/mp4", headers=response_headers)
             else:
                 body_bytes = await resp.aread()
-                error_body_for_log = body_bytes[:500].decode(errors='replace') # Log first 500 bytes
+                error_body_for_log = body_bytes[:500].decode(errors='replace')
                 print(f"[STREAM_VIDEO] Error fetching video from source. Status: {resp.status_code}, Body (first 500 bytes): {error_body_for_log!r}")
-                raise HTTPException(status_code=resp.status_code, detail=f"Error fetching video from source: {error_body_for_log}")
+                
+                # If it's a CloudFront error, try to get a fresh URL from the backend
+                if "cloudfront" in url.lower() and resp.status_code == 403:
+                    raise HTTPException(status_code=503, detail="CloudFront URL expired. Please try again.")
+                else:
+                    raise HTTPException(status_code=resp.status_code, detail=f"Error fetching video from source: {error_body_for_log}")
 
     except httpx.RequestError as e:
         print(f"[STREAM_VIDEO] httpx.RequestError while fetching video: {e}")
         raise HTTPException(status_code=500, detail=f"Request error while fetching video: {str(e)}")
     except HTTPException as e:
-        # Re-raise HTTPException directly so its original status code is preserved
         raise e
     except Exception as e:
         print(f"[STREAM_VIDEO] General Exception while fetching video: {e} (Type: {type(e)})")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred while trying to stream video: {str(e)}")
+
+
+@app.get("/api/stream-image")
+async def stream_image(url: str = Query(...)):
+    print(f"[STREAM_IMAGE] Received request for image URL: {url}")
+    
+    if not url.startswith("http://") and not url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Invalid URL format for streaming.")
+    
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            print(f"[STREAM_IMAGE] Fetching image from: {url}")
+            
+            # Add headers that might help with CloudFront access
+            headers = {
+                "Accept": "image/*,*/*;q=0.8",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache"
+            }
+            
+            # Make the GET request with headers
+            resp = await client.get(url, headers=headers)
+            
+            print(f"[STREAM_IMAGE] Source response status: {resp.status_code}")
+            print(f"[STREAM_IMAGE] Source response headers: {resp.headers}")
+
+            if resp.status_code == 200:
+                print(f"[STREAM_IMAGE] Successfully fetched image. Content-Type from source: {resp.headers.get('Content-Type')}")
+                
+                # Determine the correct content type from the response
+                content_type = resp.headers.get('Content-Type', 'image/png')
+                
+                # Create response headers
+                response_headers = {
+                    "Content-Type": content_type,
+                    "Content-Length": resp.headers.get("Content-Length", ""),
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                }
+                # Filter out empty headers
+                response_headers = {k: v for k, v in response_headers.items() if v}
+
+                # Read the entire image data
+                image_data = await resp.aread()
+                return Response(content=image_data, media_type=content_type, headers=response_headers)
+            else:
+                body_bytes = await resp.aread()
+                error_body_for_log = body_bytes[:500].decode(errors='replace')
+                print(f"[STREAM_IMAGE] Error fetching image from source. Status: {resp.status_code}, Body (first 500 bytes): {error_body_for_log!r}")
+                
+                # If it's a CloudFront error, try to get a fresh URL from the backend
+                if "cloudfront" in url.lower() and resp.status_code == 403:
+                    raise HTTPException(status_code=503, detail="CloudFront URL expired. Please try again.")
+                else:
+                    raise HTTPException(status_code=resp.status_code, detail=f"Error fetching image from source: {error_body_for_log}")
+
+    except httpx.RequestError as e:
+        print(f"[STREAM_IMAGE] httpx.RequestError while fetching image: {e}")
+        raise HTTPException(status_code=500, detail=f"Request error while fetching image: {str(e)}")
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"[STREAM_IMAGE] General Exception while fetching image: {e} (Type: {type(e)})")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred while trying to stream image: {str(e)}")
 
 
 # Add OPTIONS handler for CORS preflight requests
@@ -575,7 +726,189 @@ async def options_handler(request: Request, full_path: str):
     )
 
 
-if __name__ == "__main__":
+@app.post("/api/initiate-video-faceswap")
+async def initiate_video_faceswap_endpoint(
+    user_image: UploadFile = File(...),
+    section: str = Query(...),      # e.g., "IDENTITY_THEFT"
+    scenario: str = Query(...),     # e.g., "SCENARIO1"
+    gender: str = Query(...)       # "male" or "female"
+):
+    print(f"Received video faceswap request for file: {user_image.filename}, section: {section}, scenario: {scenario}, gender: {gender}")
+
+    if not s3_client:
+        raise HTTPException(status_code=500, detail="S3 client not initialized.")
+    if not AKOOL_API_KEY:
+        raise HTTPException(status_code=500, detail="Akool API key not configured.")
+
+    try:
+        # Get the video_swap configuration
+        if section not in FACE_CONFIGS or scenario not in FACE_CONFIGS[section] or gender not in FACE_CONFIGS[section][scenario]:
+            raise HTTPException(status_code=400, detail="Invalid section, scenario, or gender for video swap config.")
+        
+        gender_config = FACE_CONFIGS[section][scenario][gender]
+        if "video_swap" not in gender_config or not gender_config["video_swap"]:
+            raise HTTPException(status_code=400, detail=f"No video_swap configuration found for {section}/{scenario}/{gender}.")
+        
+        video_swap_config = gender_config["video_swap"]
+        target_modify_video_url = video_swap_config["modifyVideoUrl"]
+        target_faces_in_video = video_swap_config["targetFacesInVideo"]
+
+        if not target_modify_video_url or not target_faces_in_video:
+            raise HTTPException(status_code=400, detail="Incomplete video_swap configuration: modifyVideoUrl or targetFacesInVideo missing.")
+
+        # Upload user image to S3
+        print("Uploading user image to S3 for video faceswap...")
+        source_image_s3_url = await upload_to_s3(user_image, S3_BUCKET_NAME)
+        print(f"User image uploaded to S3: {source_image_s3_url}")
+
+        # Get face landmarks for the user's uploaded image (sourceImage)
+        print("Getting face landmarks for source user image from Akool...")
+        source_image_landmarks = await get_akool_face_opts(source_image_s3_url, AKOOL_API_KEY)
+        if not source_image_landmarks:
+            raise HTTPException(status_code=400, detail="Failed to detect face in the uploaded user image.")
+        print(f"Source user image face landmarks: {source_image_landmarks}")
+
+        # Prepare payload for Akool /faceswap/highquality/specifyvideo
+        akool_faceswap_video_url = f"{AKOOL_API_BASE_URL}/faceswap/highquality/specifyvideo"
+        headers = {
+            "Authorization": f"Bearer {AKOOL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "sourceImage": [
+                {
+                    "path": source_image_s3_url,
+                    "opts": source_image_landmarks
+                }
+            ],
+            "targetImage": target_faces_in_video, # This comes from our config
+            "face_enhance": 0,
+            "modifyVideo": target_modify_video_url, # This also from config
+            "webhookUrl": AKOOL_WEBHOOK_URL if AKOOL_WEBHOOK_URL else None
+        }
+
+        print(f"Akool Video Faceswap Request URL: {akool_faceswap_video_url}")
+        print(f"Akool Video Faceswap Payload: {json.dumps(payload, indent=2)}")
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(akool_faceswap_video_url, headers=headers, json=payload)
+            response_text = response.text
+            print(f"Akool Video Faceswap Raw Response Status: {response.status_code}")
+            print(f"Akool Video Faceswap Raw Response Body: {response_text}")
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("code") != 1000:
+                raise HTTPException(status_code=500, detail=f"Akool video faceswap API error. Code: {data.get('code')}. Msg: {data.get('msg')}")
+            
+            # For video, Akool returns a task ID that needs to be polled.
+            # The frontend will use this task ID with the existing /api/faceswap-status/{task_id} endpoint.
+            return {
+                "akool_task_id": data.get("data", {}).get("_id"),
+                "akool_job_id": data.get("data", {}).get("job_id"),
+                "message": data.get("msg", "Video faceswap generation started. Poll for status."),
+            }
+
+    except httpx.HTTPStatusError as hse:
+        print(f"Akool Video Faceswap API HTTP error: {hse.response.status_code}. Response: {hse.response.text}")
+        raise HTTPException(status_code=502, detail=f"Akool Video API request failed: {hse.response.status_code} - {hse.response.text[:200]}")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Unexpected error in video faceswap: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Video faceswap error: {str(e)}")
+
+
+@app.get("/api/proxy-image")
+async def proxy_image(url: str, request: Request):
+    try:
+        # Validate URL format
+        if not url:
+            raise HTTPException(status_code=400, detail="URL parameter is required")
+            
+        # Decode the URL if it's encoded
+        try:
+            decoded_url = urllib.parse.unquote(url)
+        except Exception as e:
+            print(f"Error decoding URL: {e}")
+            raise HTTPException(status_code=400, detail="Invalid URL encoding")
+
+        # Validate URL format after decoding
+        if not decoded_url.startswith(('http://', 'https://')):
+            print(f"Invalid URL format: {decoded_url}")
+            raise HTTPException(status_code=400, detail="Invalid URL format. URL must start with http:// or https://")
+
+        print(f"Proxying image from URL: {decoded_url}")
+        
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            # Base headers for all requests
+            headers = {
+                "Accept": "image/*,*/*;q=0.8",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "Origin": request.headers.get("origin", "http://localhost:3000"),
+                "Referer": request.headers.get("origin", "http://localhost:3000")
+            }
+            
+            # Add Authorization header for CloudFront URLs (Akool images)
+            if 'cloudfront.net' in decoded_url:
+                headers["Authorization"] = f"Bearer {AKOOL_API_KEY}"
+                print(f"Added Authorization header for CloudFront URL")
+            elif 'openapi.akool.com' in decoded_url or 'sg3.akool.com' in decoded_url:
+                headers["Authorization"] = f"Bearer {AKOOL_API_KEY}"
+                print(f"Added Authorization header for Akool API URL")
+            
+            try:
+                response = await client.get(decoded_url, headers=headers)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                print(f"HTTP error while fetching image: {e.response.status_code} - {e.response.text}")
+                if e.response.status_code == 403:
+                    raise HTTPException(status_code=403, detail="Access denied to image resource. Please try again.")
+                elif e.response.status_code == 404:
+                    raise HTTPException(status_code=404, detail="Image not found.")
+                else:
+                    raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch image: {e.response.text}")
+            except Exception as e:
+                print(f"Error fetching image: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error fetching image: {str(e)}")
+            
+            # Get the content type from the original response
+            content_type = response.headers.get('content-type', 'image/png')
+            
+            # Read the entire image data
+            try:
+                image_data = await response.aread()
+            except Exception as e:
+                print(f"Error reading image data: {str(e)}")
+                raise HTTPException(status_code=500, detail="Error reading image data")
+            
+            # Add CORS and caching headers
+            headers = {
+                "Content-Type": content_type,
+                "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:3000"),
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                "Cache-Control": "public, max-age=31536000",  # Cache for 1 year
+                "Pragma": "public"
+            }
+            
+            # Return the image with the appropriate content type and headers
+            return Response(
+                content=image_data,
+                media_type=content_type,
+                headers=headers
+            )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"Unexpected error in proxy_image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+if __name__ == "__main__": 
     import uvicorn
     import sys
     import pathlib
