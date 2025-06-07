@@ -7,24 +7,32 @@ export const VIDEO_URLS = {
     },
     // Cases (3 videos)
     CASES: {
-      CASE1: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_case1.mp4",
-      CASE2: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_case2.mp4",
-      CASE3: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_case3.mp4"
+      CASE1: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/part1_case1.m4v",
+      CASE2: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/part1_case2.mov",
+      CASE3: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/part1_case3.mov"
     },
     // Experience (2 scenarios with gender variations)
     EXPERIENCE: {
       SCENARIO1: {
-        male: {},
-        female: {}
+        male: {
+          path: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_scenario1_man.png",
+          opts: "916,187:1012,192:962,250:916,289"
+        },
+        female: {
+          path: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_scenario1_female.png",
+          opts: "1026,220:1138,223:1080,285:1023,326"
+        }
       },
       SCENARIO2: {
-        male: {},
-        female: {}
+        male: {
+          path: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_scenario2_man.png",
+          opts: "775,222:873,221:819,285:790,336"
+        },
+        female: {
+          path: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_scenario2_female.png",
+          opts: "980,489:1103,483:1034,571:1007,629"
+        }
       }
-    },
-    EDUCATIONAL: {
-      male: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_educational_man.mp4",
-      female: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_educational_female.mp4"
     }
   },
   // Part 2: Identity Theft
@@ -38,16 +46,12 @@ export const VIDEO_URLS = {
       CASE1: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_case1.m4v",
       CASE2: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/Identitytheft_case2.mp4"
     },
-    // Experience (2 scenarios)
+    // Experience (3 scenarios)
     EXPERIENCE: {
-      SCENARIO1: {
-        male: {},
-        female: {}
+      SCENARIO3: {
+        male: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario2.mov",
+        female: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario2.mov"
       }
-    },
-    EDUCATIONAL: {
-      male: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_educational_man.mp4",
-      female: "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/deepfake_educational_female.mp4"
-    }
   }
+}
 }; 

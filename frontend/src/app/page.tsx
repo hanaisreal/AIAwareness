@@ -1,158 +1,183 @@
 'use client'
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import UserInfoForm from './components/UserInfoForm'
+import UserInfoForm from '@/components/UserInfoForm'
+import Image from 'next/image'
 
-// Assume you have a pre-recorded greeting in /public
-const INITIAL_GREETING_AUDIO = '/greeting.mp3'
+const MINA_TALKING_GIF_SRC = "/talking.gif"
+const MINA_IDLE_PNG_SRC = "/mina_idle.png"
+
+interface UserInfo {
+  name: string;
+  age: string;
+  gender: 'male' | 'female';
+}
+
+const PART0_CONTENT = {
+  welcome: {
+    text: "안녕하세요! 요즘 자주 들리는 딥페이크와 딥보이스, 어떤 기술인지 함께 알아볼까요?",
+    audioSrc: "/part0/part0_script_1.mp3",
+  },
+  userInfoPrompt: {
+    text: "진행을 도와드리기 위해 성함과 나이, 성별을 먼저 입력해주세요.",
+    audioSrc: "/part0/part0_script_2.mp3",
+  },
+}
 
 export default function HomePage() {
   const router = useRouter()
-  const [step, setStep] = useState(0) // 0: initial welcome, 1: input, 2: personalized greeting, 3: show personalized greeting
-  const [user, setUser] = useState<{ name: string; age: string } | null>(null)
-  const [personalizedAudioUrl, setPersonalizedAudioUrl] = useState<string | null>(null)
+  const [step, setStep] = useState(0) // 0: initial welcome, 1: input
+  const [user, setUser] = useState<UserInfo | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [showNextStepButton, setShowNextStepButton] = useState(false)
-  const [isPlayingInitialAudio, setIsPlayingInitialAudio] = useState(false)
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const [currentScriptText, setCurrentScriptText] = useState("")
 
-  const initialAudioRef = useRef<HTMLAudioElement>(null)
-  const personalizedAudioRef = useRef<HTMLAudioElement>(null)
-
-  // Handle personalized audio playback and show next button
   useEffect(() => {
-    if (personalizedAudioUrl && personalizedAudioRef.current && step === 2) {
-      const audioEl = personalizedAudioRef.current
-      const playAudio = async () => {
-        try {
-          await audioEl.play()
-          setShowNextStepButton(false) // Hide button while audio plays
-        } catch (e) {
-          console.error("Error playing personalized audio:", e)
-          setShowNextStepButton(true) // Show button if play fails
-        }
-      }
-      playAudio()
+    let audioSrc = ""
+    let scriptText = ""
 
-      const handleAudioEnd = () => setShowNextStepButton(true)
-      audioEl.addEventListener('ended', handleAudioEnd)
-      return () => audioEl.removeEventListener('ended', handleAudioEnd)
+    if (step === 0) {
+      scriptText = PART0_CONTENT.welcome.text
+      audioSrc = PART0_CONTENT.welcome.audioSrc
+    } else if (step === 1) {
+      scriptText = PART0_CONTENT.userInfoPrompt.text
+      audioSrc = PART0_CONTENT.userInfoPrompt.audioSrc
     }
-  }, [personalizedAudioUrl, step])
 
-  const handlePlayInitialGreeting = async () => {
-    if (initialAudioRef.current) {
-      try {
-        await initialAudioRef.current.play()
-        setIsPlayingInitialAudio(true)
-        // Listen for the end of the initial greeting to auto-proceed or show a next button
-        initialAudioRef.current.onended = () => {
-          setIsPlayingInitialAudio(false)
-          setStep(1) // Auto-proceed to name/age input after initial greeting
-        }
-      } catch (e) {
-        console.error("Error playing initial audio:", e)
-        // If autoplay fails, directly go to next step or show an error
-        setIsPlayingInitialAudio(false)
-        setStep(1) // Fallback to next step
+    setCurrentScriptText(scriptText)
+
+    if (audioRef.current && audioSrc && step !== 0) {
+      if (!audioRef.current.paused) {
+        audioRef.current.pause()
+        audioRef.current.currentTime = 0
+      }
+      audioRef.current.src = audioSrc
+      audioRef.current.load()
+      const playPromise = audioRef.current.play()
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          setIsAudioPlaying(true)
+        }).catch(error => {
+          console.error("Audio play failed:", error)
+          setIsAudioPlaying(false)
+        })
       }
     } else {
-      setStep(1) // Fallback if audio element not ready
+      if (audioRef.current && !audioRef.current.paused) {
+        audioRef.current.pause()
+      }
+      setIsAudioPlaying(false)
+    }
+  }, [step])
+
+  const handleStart = () => {
+    if (step === 0 && audioRef.current) {
+      if (!audioRef.current.paused) {
+        audioRef.current.pause()
+        audioRef.current.currentTime = 0
+      }
+      audioRef.current.src = PART0_CONTENT.welcome.audioSrc
+      audioRef.current.load()
+      const playPromise = audioRef.current.play()
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          setIsAudioPlaying(true)
+        }).catch(error => {
+          console.error("Welcome audio play failed:", error)
+          setIsAudioPlaying(false)
+          setStep(1)
+        })
+      }
+    } else if (step === 0) {
+      setStep(1)
     }
   }
 
-  const handleUserSubmit = async (name: string, age: string) => {
-    setUser({ name, age })
+  const handleUserSubmit = async (submittedUserInfo: UserInfo) => {
+    setUser(submittedUserInfo)
     setIsLoading(true)
-    setShowNextStepButton(false)
+    
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+      setIsAudioPlaying(false)
+    }
 
     try {
-      const res = await fetch('/api/generate-speech', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, age }),
-      })
-      if (res.ok) {
-        const blob = await res.blob()
-        const url = URL.createObjectURL(blob)
-        setPersonalizedAudioUrl(url)
-        setStep(2) // Move to step where personalized audio will play
-      } else {
-        console.error("Failed to generate personalized speech")
-        setShowNextStepButton(true)
-        setStep(3) // Move to a step to show error or just the button
-      }
+      localStorage.setItem('userName', submittedUserInfo.name)
+      localStorage.setItem('userAge', submittedUserInfo.age)
+      localStorage.setItem('userGender', submittedUserInfo.gender)
+      router.push('/scenarios/part1')
     } catch (error) {
       console.error("Error submitting user info:", error)
-      setShowNextStepButton(true)
-      setStep(3) // Move to a step to show error or just the button
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }
 
-  const navigateToPart1Concept = () => {
-    router.push('/scenarios/part1') // Navigate to Part 1 main page (which starts with concept)
+  const currentMinaImage = isAudioPlaying ? MINA_TALKING_GIF_SRC : MINA_IDLE_PNG_SRC
+
+  const handleAudioEnded = () => {
+    setIsAudioPlaying(false)
+    if (step === 0 && audioRef.current?.src.includes(PART0_CONTENT.welcome.audioSrc)) {
+      setStep(1)
+    }
   }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-yellow-100 via-orange-100 to-red-100 p-4 text-gray-800">
       <div className="w-full max-w-sm mx-auto flex flex-col items-center text-center">
-        {(step !== 1 || !isPlayingInitialAudio) && (
-          <img src="/talking.gif" alt="안내 캐릭터 미나" className="w-64 h-auto mb-6" />
-        )}
+        <div className="w-64 h-64 relative mb-6">
+          <Image 
+            key={currentMinaImage}
+            src={currentMinaImage} 
+            alt="안내 캐릭터 미나" 
+            layout="fill" 
+            objectFit="contain" 
+            unoptimized={currentMinaImage.endsWith('.gif')}
+            priority
+          />
+        </div>
 
         {step === 0 && (
           <div className="animate-fade-in w-full">
-            <h1 className="text-3xl font-bold mb-4">딥페이크 체험</h1>
-            <p className="text-lg text-gray-700 mb-8">
-              안녕하세요! 저는 미나예요.<br />
-              체험을 시작해볼까요?
+            <h1 className="text-3xl font-bold mb-4">딥페이크/딥보이스 체험하기</h1>
+            <p className="text-lg text-gray-700 mb-8 min-h-[6em] flex items-center justify-center whitespace-pre-line">
+              {currentScriptText}
             </p>
-            <audio ref={initialAudioRef} src={INITIAL_GREETING_AUDIO} preload="auto" />
             <button
-              onClick={handlePlayInitialGreeting}
-              disabled={isPlayingInitialAudio}
-              className={`w-full py-3 px-6 bg-orange-500 text-white text-xl font-semibold rounded-lg shadow-md hover:bg-orange-600 transition duration-150 ease-in-out ${isPlayingInitialAudio ? 'opacity-50 cursor-not-allowed' : ''}`}
+              onClick={handleStart}
+              className="w-full py-3 px-6 bg-orange-500 text-white text-xl font-semibold rounded-lg shadow-md hover:bg-orange-600 transition duration-150 ease-in-out"
+              disabled={isAudioPlaying}
             >
-              {isPlayingInitialAudio ? '듣는 중...' : '시작하기'}
+              시작하기
             </button>
           </div>
         )}
 
         {step === 1 && (
           <div className="animate-fade-in w-full">
-            {isPlayingInitialAudio && <p className="text-md text-gray-600 mb-6">미나가 안내 중입니다...</p>}
-            {!isPlayingInitialAudio && (
-              <>
-                <h2 className="text-2xl font-semibold mb-3">이름과 나이를 알려주세요</h2>
-                <p className="text-md text-gray-600 mb-6">
-                  체험 중 미나가 어르신의 성함을 불러드릴 거예요. <br/> 이 정보는 저장되지 않으니 안심하세요.
-                </p>
-                <UserInfoForm onSubmit={handleUserSubmit} />
-              </>
-            )}
-          </div>
-        )}
-
-        {(step === 2 || step === 3) && user && (
-          <div className="animate-fade-in w-full">
-            <h2 className="text-2xl font-bold mb-4">{user.name}님, 반가워요!</h2>
-            {isLoading && <div className="text-orange-600 my-4">음성 준비 중...</div>}
-            {step === 2 && personalizedAudioUrl && <audio ref={personalizedAudioRef} src={personalizedAudioUrl} />}
-            
-            {showNextStepButton && !isLoading && (
-              <button
-                onClick={navigateToPart1Concept}
-                className="mt-8 text-orange-600 hover:text-orange-700 font-semibold text-lg py-2 transition duration-150 ease-in-out"
-              >
-                다음 단계로 →
-              </button>
-            )}
-            {step === 3 && !isLoading && !personalizedAudioUrl && (
-              <p className="text-red-500 my-4">음성 로딩에 실패했어요. 하지만 다음 단계로 진행할 수 있습니다.</p>
-            )}
+            <p className="text-md text-gray-600 mb-6 min-h-[4em] flex items-center justify-center whitespace-pre-line">
+              {currentScriptText}
+            </p>
+            <UserInfoForm onSubmit={handleUserSubmit} />
+            {isLoading && <div className="text-orange-600 my-4">처리 중...</div>}
           </div>
         )}
       </div>
+      <audio 
+        ref={audioRef} 
+        className="hidden" 
+        onPlay={() => setIsAudioPlaying(true)} 
+        onEnded={handleAudioEnded}
+        onError={(e) => {
+          console.error("Error with audio element for src:", (e.target as HTMLAudioElement).src)
+          setIsAudioPlaying(false)
+          if (step === 0 && audioRef.current?.src.includes(PART0_CONTENT.welcome.audioSrc)) {
+            setStep(1)
+          }
+        }}
+      />
       <style jsx global>{`
         .animate-fade-in {
           animation: fadeIn 0.7s ease-out;

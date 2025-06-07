@@ -2,7 +2,7 @@
 import { useState } from 'react'
 
 export default function VideoTest() {
-  const originalVideoUrl = "https://d2qf6ukcym4kn9.cloudfront.net/final_deepfake_short-ad0e48b1-bf89-451d-aae1-7f8f43ae5f1a-2846.m4v"
+  const originalVideoUrl = "https://d2qf6ukcym4kn9.cloudfront.net/final_identitytheft_scenario2-3eb44c61-99b3-4b3d-ba34-5da968e23afc-4322.mov"
   const videoUrl = `/api/stream-video?url=${encodeURIComponent(originalVideoUrl)}`
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

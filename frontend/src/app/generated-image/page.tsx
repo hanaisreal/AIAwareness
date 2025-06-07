@@ -26,16 +26,14 @@ export default function GeneratedImagePage() {
 
   const handleNextStep = () => {
     if (fromScenario === '1') {
-      // Navigate to Scenario 2 of Part 1
-      // TODO: Create frontend/src/app/scenarios/part1/scenario2/page.tsx
-      router.push('/scenarios/part1/scenario2'); 
+      // Navigate directly to scenario 2
+      router.push('/scenarios/part1?scenario=2&step=intro'); 
     } else if (fromScenario === '2') {
-      // After Scenario 2 of Part 1, navigate to Part 2 introduction or a summary page
-      // For now, let's assume it goes to the Part 2 main page
+      // After Scenario 2, navigate to Part 2
       router.push('/scenarios/part2'); 
     } else {
-      // Default fallback or if fromScenario is not specified (e.g. from a different flow)
-      router.push('/scenarios/part1'); // Go back to Part 1 main page
+      // Default fallback
+      router.push('/scenarios/part1');
     }
   };
 

@@ -64,25 +64,25 @@ FACE_CONFIGS: Dict[str, Dict[str, ScenarioConfig]] = {
         }
     },
     "IDENTITY_THEFT": {
-        "SCENARIO1": { # This scenario will be for image-to-video swap
+        "SCENARIO1": {
             "male": {
                 "video_swap": {
-                    "modifyVideoUrl": "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario_man.mp4", # Placeholder
+                    "modifyVideoUrl": "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario2.mov",
                     "targetFacesInVideo": [
                         {
-                            "opts": "176,259:243,259:209,303:183,328", # Example opts for a face in this video
-                            "path": "" # Optional: path to a crop of this face from video
+                            "opts": "354,475:561,455:465,576:396,708",
+                            "path": "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario2_man.png"
                         }
                     ]
                 }
             },
             "female": {
                 "video_swap": {
-                    "modifyVideoUrl": "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario_female.mp4", # Placeholder
+                    "modifyVideoUrl": "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario2.mov",
                     "targetFacesInVideo": [
                         {
-                            "opts": "200,300:250,300:225,350:200,380", # Example opts for a face in this video
-                            "path": "" # Optional
+                            "opts": "354,475:561,455:465,576:396,708",
+                            "path": "https://deepfake-videomaking.s3.us-east-1.amazonaws.com/video-url/identitytheft_scenario2_man.png"
                         }
                     ]
                 }

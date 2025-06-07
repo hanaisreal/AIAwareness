@@ -8,18 +8,29 @@ export async function GET(request: Request) {
     return new NextResponse('Video URL is required', { status: 400 })
   }
 
+  const AKOOL_API_KEY = process.env.AKOOL_API_KEY;
+
   try {
-    console.log('Fetching video from:', videoUrl)
+    console.log('Frontend API: Fetching video from:', videoUrl)
+    
+    const fetchHeaders: HeadersInit = {
+      'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
+      'Range': 'bytes=0-',
+    };
+
+    if (videoUrl.includes('cloudfront.net') && AKOOL_API_KEY) {
+      console.log('Frontend API: CloudFront URL detected, adding Authorization header.');
+      fetchHeaders['Authorization'] = `Bearer ${AKOOL_API_KEY}`;
+    } else if (videoUrl.includes('cloudfront.net') && !AKOOL_API_KEY) {
+      console.warn('Frontend API: CloudFront URL detected but AKOOL_API_KEY is not set in environment variables.');
+    }
     
     const response = await fetch(videoUrl, {
-      headers: {
-        'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
-        'Range': 'bytes=0-',
-      },
+      headers: fetchHeaders,
     })
     
     if (!response.ok) {
-      console.error('Video fetch failed:', {
+      console.error('Frontend API: Video fetch failed:', {
         status: response.status,
         statusText: response.statusText,
         headers: Object.fromEntries(response.headers.entries())
@@ -29,11 +40,11 @@ export async function GET(request: Request) {
 
     // Get the video content type
     const contentType = response.headers.get('content-type') || 'video/mp4'
-    console.log('Video content type:', contentType)
+    console.log('Frontend API: Video content type:', contentType)
 
     // Get the content length
     const contentLength = response.headers.get('content-length')
-    console.log('Content length:', contentLength)
+    console.log('Frontend API: Content length:', contentLength)
 
     // Create a new response with the video stream
     const headers: Record<string, string> = {
@@ -50,7 +61,7 @@ export async function GET(request: Request) {
 
     return new NextResponse(response.body, { headers })
   } catch (error) {
-    console.error('Error streaming video:', error)
+    console.error('Frontend API: Error streaming video:', error)
     return new NextResponse(
       JSON.stringify({ 
         error: 'Error streaming video', 
